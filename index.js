@@ -21,7 +21,7 @@ export async function connectToMongoDB() {
 }
 const connectMongoDB = await connectToMongoDB();
 const db = connectMongoDB.db("fix-mate");
-const users = db.collection("users");
+const users = db.collection("user");
 const services = db.collection("services");
 
 app.get("/", (req, res) => {
@@ -34,6 +34,26 @@ app.get("/users", async (req, res) => {
   const result = await cursor.toArray();
   res.send(result);
 });
+
+app.patch('/users/:id/role',async(req,res) => {
+  const id = req.params.id;
+  const query = {_id: new ObjectId(id)}
+  const {role} = req.body
+  const updateDoc = {
+    $set: {
+      role: role
+    }
+  }
+  const result = await users.updateOne(query,updateDoc)
+  res.send(result)
+})
+
+app.delete('/users/:id',async(req,res)=> {
+  const id = req.params.id;
+  const query = {_id: new ObjectId(id)}
+  const result = await users.deleteOne(query)
+  res.send(result)
+})
 
 // Services Related api
 app.get("/services", async (req, res) => {
@@ -53,18 +73,19 @@ app.post("/services", async (req, res) => {
   const result = await services.insertOne(data);
   res.send(result);
 });
+
 app.patch("/services/:id", async (req, res) => {
   const id = req.params.id;
   const query = { _id: new ObjectId(id) };
   const updateData = req.body;
 
-  const updateFields = {
-    ...updateData,
+  const updateFields = { 
+    ...updateData 
   };
 
-  if ( updateData.title || updateData.category || updateData.description || updateData.basePrice ) {
-    updateFields.approvalStatus = "pending";
-  }
+  if (updateData.title || updateData.category || updateData.description || updateData.basePrice) {
+      updateFields.approvalStatus = "pending";
+    }
 
   const updateDoc = {
     $set: updateFields,
@@ -77,17 +98,28 @@ app.patch("/services/:id", async (req, res) => {
       .status(404)
       .json({ success: false, message: "Service not found" });
   }
-  res.send({
+
+  res.status(200).json({
     success: true,
-    message: "Service updated successfully",
+    message: "Availability updated successfully",
     result,
   });
 });
 
-app.get('/services/:id', async(req,res) => {
+app.get("/services/:id", async (req, res) => {
   const id = req.params.id;
-  const query = {_id: new ObjectId(id)}
-})
+  const query = { _id: new ObjectId(id) };
+  const result = await services.findOne(query);
+  res.send(result);
+});
+
+app.delete("/services/:id", async (req, res) => {
+  const id = req.params.id;
+  const query = { _id: new ObjectId(id) };
+  const result = await services.deleteOne(query);
+  res.send(result);
+});
+
 
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
