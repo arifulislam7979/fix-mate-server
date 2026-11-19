@@ -112,14 +112,26 @@ app.get("/services/:id", async (req, res) => {
   const result = await services.findOne(query);
   res.send(result);
 });
-
+// admin and technician api
 app.delete("/services/:id", async (req, res) => {
   const id = req.params.id;
   const query = { _id: new ObjectId(id) };
   const result = await services.deleteOne(query);
   res.send(result);
 });
-
+// admin services api 
+app.patch('/services/:id/status', async(req,res) => {
+  const id = req.params.id;
+  const {approvalStatus} = req.body;
+  const query = {_id: new ObjectId(id)};
+  const updateDoc = {
+    $set: {
+      approvalStatus: approvalStatus
+    }
+  }
+  const result = await services.updateOne(query,updateDoc)
+  res.send(result)
+})
 
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
