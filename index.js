@@ -9,7 +9,6 @@ const port = process.env.PORT || 5000;
 export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 app.use(cors());
-app.use(express.json());
 
 const client = new MongoClient(process.env.MONGODB_URI);
 export async function connectToMongoDB() {
@@ -27,6 +26,103 @@ const users = db.collection("user");
 const services = db.collection("services");
 const bookings = db.collection("bookings");
 const payments = db.collection("payments");
+
+app.post(
+  "/api/webhooks/stripe",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    try {
+      const signature = req.headers["stripe-signature"];
+      if (!signature || !process.env.STRIPE_WEBHOOK_SECRET) {
+        return res.status(400).send("Missing webhook signature or secret");
+      }
+
+      if (!Buffer.isBuffer(req.body)) {
+        return res.status(400).send("Invalid raw request body");
+      }
+
+      const event = stripe.webhooks.constructEvent(
+        req.body,
+        signature,
+        process.env.STRIPE_WEBHOOK_SECRET,
+      );
+
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object;
+
+        if (session.payment_status === "paid") {
+          const bookingId = session.metadata?.bookingId;
+
+          if (bookingId && ObjectId.isValid(bookingId)) {
+            const bookingObjectId = new ObjectId(bookingId);
+            const existingBooking = await bookings.findOne({
+              _id: bookingObjectId,
+            });
+
+            if (existingBooking) {
+              const transactionId =
+                typeof session.payment_intent === "string"
+                  ? session.payment_intent
+                  : session.id;
+
+              const paidAmount =
+                typeof session.amount_total === "number"
+                  ? session.amount_total / 100
+                  : Number(
+                      existingBooking.finalAmount ??
+                        existingBooking.basePrice ??
+                        0,
+                    );
+
+              await bookings.updateOne(
+                { _id: bookingObjectId },
+                {
+                  $set: {
+                    paymentStatus: "paid",
+                    paidAt: new Date(),
+                    updatedAt: new Date(),
+                    transactionId,
+                    stripeSessionId: session.id,
+                  },
+                },
+              );
+
+              await payments.updateOne(
+                { stripeSessionId: session.id },
+                {
+                  $setOnInsert: {
+                    bookingId: bookingObjectId,
+                    serviceTitle:
+                      existingBooking.serviceTitle || "Repair Service",
+                    customerEmail:
+                      session.customer_email ||
+                      existingBooking.customerEmail ||
+                      "",
+                    technicianEmail: existingBooking.technicianEmail || "",
+                    amount: paidAmount,
+                    currency: session.currency || "usd",
+                    transactionId,
+                    stripeSessionId: session.id,
+                    status: "paid",
+                    paidAt: new Date(),
+                  },
+                },
+                { upsert: true },
+              );
+            }
+          }
+        }
+      }
+
+      return res.status(200).json({ received: true });
+    } catch (err) {
+      console.error("Stripe webhook error:", err);
+      return res.status(500).json({ error: err.message || "Internal error" });
+    }
+  },
+);
+
+app.use(express.json());
 
 app.get("/", (req, res) => {
   res.send("Hello World!");
@@ -329,8 +425,8 @@ app.patch("/bookings/:id/status", async (req, res) => {
 // Payment related api
 
 app.post("/create-checkout-session", async (req, res) => {
-  const bookingId = req.body?._id;
-  const customerEmail = req.body?.customerEmail;
+  const bookingId = req.body._id;
+  const customerEmail = req.body.customerEmail;
 
   if (!bookingId) {
     return res.status(400).json({ message: "Valid bookingId is required" });
@@ -385,7 +481,7 @@ app.post("/create-checkout-session", async (req, res) => {
       technicianEmail: booking.technicianEmail,
     },
 
-    success_url: `${process.env.CLIENT_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+    success_url: `${process.env.CLIENT_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}&bookingId=${booking._id.toString()}`,
     cancel_url: `${process.env.CLIENT_URL}/payment/cancel`,
   });
 
