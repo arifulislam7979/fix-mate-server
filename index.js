@@ -2,9 +2,11 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { MongoClient, ObjectId } from "mongodb";
+import Stripe from "stripe";
 
 const app = express();
 const port = process.env.PORT || 5000;
+export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 app.use(cors());
 app.use(express.json());
@@ -24,6 +26,7 @@ const db = connectMongoDB.db("fix-mate");
 const users = db.collection("user");
 const services = db.collection("services");
 const bookings = db.collection("bookings");
+const payments = db.collection("payments");
 
 app.get("/", (req, res) => {
   res.send("Hello World!");
@@ -284,7 +287,6 @@ app.patch("/bookings/:id/status", async (req, res) => {
     });
   }
 
-  // টেকনিশিয়ান ইমেইল পাঠানো হলে মালিকানা যাচাই
   if (
     typeof technicianEmail === "string" &&
     technicianEmail.trim() &&
@@ -303,15 +305,8 @@ app.patch("/bookings/:id/status", async (req, res) => {
     updatedAt: new Date(),
   };
 
-  // Completed হলে finalAmount ভ্যালিডেট ও সেট করা
   if (status === "completed") {
     const numericFinalAmount = Number(finalAmount);
-    if (Number.isNaN(numericFinalAmount) || numericFinalAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Final amount must be a number greater than 0",
-      });
-    }
     updateFields.finalAmount = numericFinalAmount;
   } else if (typeof finalAmount === "number" && finalAmount > 0) {
     updateFields.finalAmount = finalAmount;
@@ -330,6 +325,71 @@ app.patch("/bookings/:id/status", async (req, res) => {
     message: "Booking status updated successfully",
     booking: finalDoc,
   });
+});
+// Payment related api
+
+app.post("/create-checkout-session", async (req, res) => {
+  const bookingId = req.body?._id;
+  const customerEmail = req.body?.customerEmail;
+
+  if (!bookingId) {
+    return res.status(400).json({ message: "Valid bookingId is required" });
+  }
+  const booking = await bookings.findOne({ _id: new ObjectId(bookingId) });
+
+  if (!booking) {
+    return res.status(404).json({ message: "Booking not found" });
+  }
+
+  // check
+  if (
+    customerEmail &&
+    booking.customerEmail?.toLowerCase() !== customerEmail.trim().toLowerCase()
+  ) {
+    return res.status(403).json({ message: "Unauthorized booking payment" });
+  }
+
+  if (booking.status !== "completed") {
+    return res
+      .status(400)
+      .json({ message: "Payment is only allowed after job completion" });
+  }
+
+  if (booking.paymentStatus === "paid") {
+    return res.status(400).json({ message: "This booking is already paid" });
+  }
+  const amount = Number(booking.finalAmount ?? booking.basePrice ?? 0);
+  if (Number.isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ message: "Invalid payable amount" });
+  }
+
+  const session = await stripe.checkout.sessions.create({
+    mode: "payment",
+    customer_email: booking.customerEmail,
+    line_items: [
+      {
+        price_data: {
+          currency: "usd",
+          product_data: {
+            name: booking.serviceTitle,
+            description: `Technician: ${booking.technicianName}`,
+          },
+          unit_amount: Math.round(amount * 100),
+        },
+        quantity: 1,
+      },
+    ],
+    metadata: {
+      bookingId: booking._id.toString(),
+      customerEmail: booking.customerEmail,
+      technicianEmail: booking.technicianEmail,
+    },
+
+    success_url: `${process.env.CLIENT_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${process.env.CLIENT_URL}/payment/cancel`,
+  });
+
+  return res.status(200).json({ url: session.url, sessionId: session.id });
 });
 
 app.listen(port, () => {
