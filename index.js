@@ -180,39 +180,157 @@ app.post("/bookings", async (req, res) => {
 });
 
 app.get("/bookings", async (req, res) => {
-  const { customerEmail, technicianEmail } = req.query;
+  const { customerEmail, technicianEmail, status, search } = req.query;
   const query = {};
 
-  if (customerEmail) {
-    query.customerEmail = customerEmail;
-  }
-  if (technicianEmail) {
-    query.technicianEmail = technicianEmail;
+  if (typeof customerEmail === "string" && customerEmail.trim()) {
+    query.customerEmail = customerEmail.trim().toLowerCase();
   }
 
-  const result = await bookings.find(query).sort({ createdAt: -1 }).toArray();
+  if (typeof technicianEmail === "string" && technicianEmail.trim()) {
+    query.technicianEmail = technicianEmail.trim().toLowerCase();
+  }
 
-  res.send(result);
+  if (
+    typeof status === "string" &&
+    status.trim() &&
+    status.trim().toLowerCase() !== "all"
+  ) {
+    query.status = status.trim().toLowerCase();
+  }
+  if (typeof search === "string" && search.trim()) {
+    const safeRegex = new RegExp(
+      search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      "i",
+    );
+    query.$or = [
+      { serviceTitle: safeRegex },
+      { customerName: safeRegex },
+      { customerEmail: safeRegex },
+      { customerPhone: safeRegex },
+      { address: safeRegex },
+      { problemDescription: safeRegex },
+    ];
+  }
+
+  const result = await bookings
+    .find(query)
+    .sort({ createdAt: -1, _id: -1 })
+    .toArray();
+
+  return res.status(200).json(result);
 });
 
-// app.patch('/bookings/:id/cancel', async(req,res) => {
-//   const id = p
-// } ) 
+app.patch("/bookings/:id/cancel", async (req, res) => {
+  const id = req.params.id;
+  const query = { _id: new ObjectId(id) };
+  const booking = await bookings.findOne(query);
 
+  if (!booking) {
+    return res.status(404).send({
+      success: false,
+      message: "Booking not found.",
+    });
+  }
 
+  if (booking.status !== "requested") {
+    return res.status(400).send({
+      success: false,
+      message: "Only requested bookings can be cancelled.",
+    });
+  }
+  const updateDoc = {
+    $set: {
+      status: "cancelled",
+      updatedAt: new Date(),
+    },
+  };
 
+  const result = await bookings.updateOne(query, updateDoc);
+  res.send({
+    success: true,
+    modifiedCount: result.modifiedCount,
+  });
+});
 
+// technician api
+app.patch("/bookings/:id/status", async (req, res) => {
+  const { id } = req.params;
+  const { status, finalAmount, technicianEmail } = req.body || {};
 
+  const allowedStatuses = [
+    "requested",
+    "accepted",
+    "in-progress",
+    "completed",
+    "rejected",
+    "cancelled",
+  ];
 
+  if (typeof status !== "string" || !allowedStatuses.includes(status)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid booking status",
+    });
+  }
 
+  const query = { _id: new ObjectId(id) };
+  const existingBooking = await bookings.findOne(query);
 
+  if (!existingBooking) {
+    return res.status(404).json({
+      success: false,
+      message: "Booking not found",
+    });
+  }
 
+  // টেকনিশিয়ান ইমেইল পাঠানো হলে মালিকানা যাচাই
+  if (
+    typeof technicianEmail === "string" &&
+    technicianEmail.trim() &&
+    existingBooking.technicianEmail &&
+    existingBooking.technicianEmail.trim().toLowerCase() !==
+      technicianEmail.trim().toLowerCase()
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: "You are not authorized to update this booking",
+    });
+  }
 
+  const updateFields = {
+    status,
+    updatedAt: new Date(),
+  };
 
+  // Completed হলে finalAmount ভ্যালিডেট ও সেট করা
+  if (status === "completed") {
+    const numericFinalAmount = Number(finalAmount);
+    if (Number.isNaN(numericFinalAmount) || numericFinalAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Final amount must be a number greater than 0",
+      });
+    }
+    updateFields.finalAmount = numericFinalAmount;
+  } else if (typeof finalAmount === "number" && finalAmount > 0) {
+    updateFields.finalAmount = finalAmount;
+  }
 
+  const updatedBooking = await bookings.findOneAndUpdate(
+    query,
+    { $set: updateFields },
+    { returnDocument: "after" },
+  );
 
+  const finalDoc = updatedBooking?.value || updatedBooking;
 
-
+  return res.status(200).json({
+    success: true,
+    message: "Booking status updated successfully",
+    booking: finalDoc,
+  });
+});
 
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
