@@ -124,6 +124,12 @@ app.get("/", (req, res) => {
 
 // User Related api
 app.get("/users", async (req, res) => {
+  const { email } = req.query;
+
+  if (email) {
+    const user = await users.findOne({ email: String(email).trim() });
+    return res.send(user || null);
+  }
   const cursor = users.find({});
   const result = await cursor.toArray();
   res.send(result);
@@ -146,6 +152,32 @@ app.delete("/users/:id", async (req, res) => {
   const id = req.params.id;
   const query = { _id: new ObjectId(id) };
   const result = await users.deleteOne(query);
+  res.send(result);
+});
+
+app.patch("/users/:id/profile", async (req, res) => {
+  const { id } = req.params;
+  const { name, phone, area, bio, image } = req.body;
+
+  if (!ObjectId.isValid(id)) {
+    return res.status(400).send({ message: "Invalid user ID" });
+  }
+  const query = { _id: new ObjectId(id) };
+  const updateFields = {
+    updatedAt: new Date(),
+  };
+
+  if (typeof name === "string" && name.trim()) updateFields.name = name.trim();
+  if (typeof phone === "string") updateFields.phone = phone.trim();
+  if (typeof area === "string") updateFields.area = area.trim();
+  if (typeof bio === "string") updateFields.bio = bio.trim();
+  if (typeof image === "string") updateFields.image = image.trim();
+
+  const updatedDoc = {
+    $set: updateFields,
+  };
+
+  const result = await users.updateOne(query, updatedDoc);
   res.send(result);
 });
 
@@ -480,6 +512,26 @@ app.post("/create-checkout-session", async (req, res) => {
   });
 
   return res.status(200).json({ url: session.url, sessionId: session.id });
+});
+
+app.get("/payments", async (req, res) => {
+  const { customerEmail, technicianEmail } = req.query;
+  const query = {};
+
+  if (customerEmail) {
+    query.customerEmail = customerEmail;
+  }
+
+  if (technicianEmail) {
+    query.technicianEmail = technicianEmail;
+  }
+
+  const result = await payments
+    .find(query)
+    .sort({ paidAt: -1, _id: -1 })
+    .toArray();
+
+  res.send(result);
 });
 
 app.listen(port, () => {
