@@ -184,19 +184,69 @@ app.patch("/users/:id/profile", async (req, res) => {
 // Services Related api
 app.get("/services", async (req, res) => {
   const query = {};
+  const andConditions = [];
 
   if (req.query) {
     if (req.query.technicianEmail) {
       query.technicianEmail = req.query.technicianEmail;
     }
+
     if (req.query.approvalStatus) {
       query.approvalStatus = req.query.approvalStatus;
     }
+
     if (req.query.isAvailable !== undefined) {
       query.isAvailable = req.query.isAvailable === "true";
     }
+
+    const searchText = String(req.query.q || "").trim();
+    if (searchText) {
+      const searchRegex = new RegExp(searchText, "i");
+      andConditions.push({
+        $or: [
+          { title: searchRegex },
+          { serviceTitle: searchRegex },
+          { category: searchRegex },
+          { description: searchRegex },
+        ],
+      });
+    }
+
+    // 2. Category filter (e.g. ?category=AC)
+    const categoryVal = req.query.category;
+    if (categoryVal && categoryVal.toLowerCase() !== "all") {
+      query.category = new RegExp(`^${categoryVal}$`, "i");
+    }
+
+    // 3. Service mode / delivery type filter (e.g. ?mode=Shop Drop-off)
+    const modeVal = req.query.mode;
+    if (modeVal && modeVal.toLowerCase() !== "all") {
+      const modeRegex = new RegExp(`^${modeVal}$`, "i");
+      andConditions.push({
+        $or: [
+          { serviceMode: modeRegex },
+          { deliveryType: modeRegex },
+          { mode: modeRegex },
+        ],
+      });
+    }
   }
-  const cursor = services.find(query);
+  if (andConditions.length > 0) {
+    query.$and = andConditions;
+  }
+
+  let sortOption = { createdAt: -1, _id: -1 };
+  const sortKey = String(req.query?.sort || "newest")
+    .trim()
+    .toLowerCase();
+
+  if (sortKey === "price_asc" || sortKey === "low_to_high") {
+    sortOption = { basePrice: 1, price: 1, _id: 1 };
+  } else if (sortKey === "price_desc" || sortKey === "high_to_low") {
+    sortOption = { basePrice: -1, price: -1, _id: -1 };
+  }
+
+  const cursor = services.find(query).sort(sortOption);
   const result = await cursor.toArray();
   res.send(result);
 });
