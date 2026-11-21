@@ -251,6 +251,19 @@ app.get("/services", async (req, res) => {
   res.send(result);
 });
 
+app.get("/services/latest", async (req, res) => {
+  const query = {
+    approvalStatus: "approved",
+    isAvailable: true,
+  };
+  const result = await services
+    .find(query)
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(6)
+    .toArray();
+  res.send(result);
+});
+
 app.post("/services", async (req, res) => {
   const data = req.body;
   const newService = {
